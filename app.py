@@ -19,8 +19,8 @@ st.set_page_config(
 def get_onemap_token():
     """Fetches and caches the OneMap API access token using secrets."""
     try:
-        email = st.secrets["ONEMAP_EMAIL"]
-        password = st.secrets["ONEMAP_PASSWORD"]
+        email = "troykueh@gmail.com"
+        password = "Itstroy5834@"
     except KeyError:
         st.error("OneMap credentials not found. Please add ONEMAP_EMAIL and ONEMAP_PASSWORD to your Streamlit secrets.")
         return None
