@@ -158,7 +158,11 @@ if submitted:
 
         # Prepare data for model prediction
         model_input_data = input_data.copy()
-        model_input_data.update({'town': town, 'flat_type': flat_type, 'storey_range': storey_range, 'flat_model': flat_model, 'floor_area_sqm': floor_area_sqm})
+        model_input_data['town'] = town
+        model_input_data['flat_type'] = flat_type
+        model_input_data['storey_range'] = storey_range
+        model_input_data['flat_model'] = flat_model
+        model_input_data['floor_area_sqm'] = floor_area_sqm
         
         numeric_features = [f"dist_{poi[2]}_m" for poi in ALL_POIS] + ['floor_area_sqm']
         categorical_features = ['town', 'flat_type', 'storey_range', 'flat_model']
