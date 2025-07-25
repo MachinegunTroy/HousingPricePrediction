@@ -17,14 +17,12 @@ st.set_page_config(
 # --- OneMap API Authentication & Functions ---
 @st.cache_resource
 def get_onemap_token():
-    """Fetches and caches the OneMap API access token using secrets."""
     try:
         email = "troykueh@gmail.com"
         password = "Itstroy5834@"
     except KeyError:
         st.error("OneMap credentials not found. Please add ONEMAP_EMAIL and ONEMAP_PASSWORD to your Streamlit secrets.")
         return None
-
     url = "https://www.onemap.gov.sg/api/auth/post/getToken"
     payload = {"email": email, "password": password}
     try:
@@ -36,9 +34,7 @@ def get_onemap_token():
         return None
 
 def search_location(location, token):
-    """Searches for a location using OneMap API and returns its lat/lon."""
-    if not token:
-        return None, None
+    if not token: return None, None
     url = "https://www.onemap.gov.sg/api/common/elastic/search"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"searchVal": location, "returnGeom": "Y", "getAddrDetails": "Y", "pageNum": 1}
@@ -46,48 +42,42 @@ def search_location(location, token):
         resp = requests.get(url, headers=headers, params=params)
         resp.raise_for_status()
         results = resp.json().get("results", [])
-        if not results:
-            return None, None
+        if not results: return None, None
         first = results[0]
         return float(first["LATITUDE"]), float(first["LONGITUDE"])
-    except (requests.exceptions.RequestException, KeyError, ValueError) as e:
-        st.warning(f"Could not find coordinates for '{location}'. Error: {e}")
+    except (requests.exceptions.RequestException, KeyError, ValueError):
         return None, None
 
 # --- Caching Data Loading ---
 @st.cache_data
 def load_data():
-    """Loads all necessary CSV files into dataframes, caching the result."""
     base_path = 'data/'
-    dataframes = {
+    return {
         "main": pd.read_csv(os.path.join(base_path, 'output.csv')),
         "bus_stops": pd.read_csv(os.path.join(base_path, 'bus_stop_locations.csv')),
         "pei": pd.read_csv(os.path.join(base_path, 'cpe_pei_premises.csv')),
         "jc": pd.read_csv(os.path.join(base_path, 'jc_locations.csv')),
         "kindergartens": pd.read_csv(os.path.join(base_path, 'kindergartens.csv')),
-        "primary": pd.read_csv(os.path.join(base_path, 'primary_school_locations.csv')),
-        "secondary": pd.read_csv(os.path.join(base_path, 'secondary_school_locations.csv')),
-        "poly": pd.read_csv(os.path.join(base_path, 'poly_locations.csv')),
+        "primary_schools": pd.read_csv(os.path.join(base_path, 'primary_school_locations.csv')),
+        "secondary_schools": pd.read_csv(os.path.join(base_path, 'secondary_school_locations.csv')),
+        "polys": pd.read_csv(os.path.join(base_path, 'poly_locations.csv')),
         "libraries": pd.read_csv(os.path.join(base_path, 'libraries.csv')),
         "malls": pd.read_csv(os.path.join(base_path, 'mall_locations.csv')),
         "hospitals": pd.read_csv(os.path.join(base_path, 'moh_hospitals.csv')),
-        "mrt": pd.read_csv(os.path.join(base_path, 'mrt_stations.csv')),
-        "sports": pd.read_csv(os.path.join(base_path, 'sportsg_sport_facilities.csv')),
-        "hawker": pd.read_csv(os.path.join(base_path, 'ssot_hawkercentres.csv'))
+        "mrt_stations": pd.read_csv(os.path.join(base_path, 'mrt_stations.csv')),
+        "sports_facilities": pd.read_csv(os.path.join(base_path, 'sportsg_sport_facilities.csv')),
+        "hawker_centres": pd.read_csv(os.path.join(base_path, 'ssot_hawkercentres.csv'))
     }
-    return dataframes
 
 # --- Load Model ---
 @st.cache_resource
 def load_model():
-    """Loads the trained model pipeline, caching the resource."""
     try:
         return joblib.load('models/model_pipeline.joblib')
     except FileNotFoundError:
         return None
 
 # --- Main App Logic ---
-# Load all necessary resources
 ACCESS_TOKEN = get_onemap_token()
 dataframes = load_data()
 model_pipeline = load_model()
@@ -119,7 +109,23 @@ def add_nearest_poi_info(df_flats, df_poi, name_col, poi_prefix):
     df_flats[f"lon_{poi_prefix}"] = df_poi_clean.iloc[nearest_indices][lon_col].values
     return df_flats
 
-ALL_POIS = [(dataframes[key], "name" if "name" in dataframes[key].columns else "Name", key) for key in list(dataframes.keys())[1:]]
+# *** THIS IS THE FIX ***
+# Manually define the POIs with the correct prefixes to match the trained model
+ALL_POIS = [
+    (dataframes["bus_stops"], "name", "bus_stop"),
+    (dataframes["pei"], "Name", "pei"),
+    (dataframes["jc"], "name", "jc"),
+    (dataframes["kindergartens"], "Name", "kindergarten"),
+    (dataframes["primary_schools"], "name", "primary_school"),
+    (dataframes["secondary_schools"], "name", "secondary_school"),
+    (dataframes["polys"], "name", "poly"),
+    (dataframes["libraries"], "Name", "library"),
+    (dataframes["malls"], "name", "mall"),
+    (dataframes["hospitals"], "Name", "hospital"),
+    (dataframes["mrt_stations"], "name", "mrt_station"),
+    (dataframes["sports_facilities"], "Name", "sports_facility"),
+    (dataframes["hawker_centres"], "Name", "hawker_centre"),
+]
 
 # --- UI Design ---
 st.title("🏠 Singapore HDB Resale Price Predictor")
@@ -127,17 +133,22 @@ st.markdown("Enter HDB flat details to get an estimated resale price and see a m
 
 with st.form("prediction_form"):
     st.header("Flat Details")
-    form_col1, form_col2 = st.columns(2)
+    form_col1, form_col2, form_col3 = st.columns(3)
     with form_col1:
         town = st.selectbox("Town/Estate", options=sorted(dataframes['main']['town'].unique()))
         street_name = st.text_input("Street Name", value="ANG MO KIO AVE 10")
         block = st.text_input("Block Number", value="406")
-        flat_model = st.selectbox("Flat Model", options=sorted(dataframes['main']['flat_model'].unique()))
     with form_col2:
+        flat_model = st.selectbox("Flat Model", options=sorted(dataframes['main']['flat_model'].unique()))
         storey_range = st.selectbox("Storey Range", options=sorted(dataframes['main']['storey_range'].unique()))
         flat_type = st.selectbox("Flat Type", options=sorted(dataframes['main']['flat_type'].unique()))
+    with form_col3:
         floor_area_sqm = st.number_input("Floor Area (sqm)", min_value=20.0, max_value=300.0, value=67.0)
         lease_commence_date = st.number_input("Lease Commence Date (Year)", min_value=1960, max_value=2025, value=1978)
+        st.markdown("<h6>Remaining Lease</h6>", unsafe_allow_html=True)
+        lease_years = st.number_input("Years", min_value=0, max_value=99, value=60)
+        lease_months = st.number_input("Months", min_value=0, max_value=11, value=7)
+
     submitted = st.form_submit_button("Predict & Generate Map")
 
 # --- Prediction & Map Generation Logic ---
@@ -150,26 +161,32 @@ if submitted:
         st.error(f"Could not find coordinates for '{location_query}'. Please check the address.")
     else:
         st.success(f"Found coordinates: Latitude={lat:.5f}, Longitude={lon:.5f}")
-        input_data = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
         
+        # --- Create DataFrame for Display ---
+        df_for_display = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
         with st.spinner('Finding nearest amenities...'):
             for poi_df, name_col, prefix in ALL_POIS:
-                input_data = add_nearest_poi_info(input_data, poi_df, name_col, prefix)
+                df_for_display = add_nearest_poi_info(df_for_display, poi_df, name_col, prefix)
 
-        # Prepare data for model prediction
-        model_input_data = input_data.copy()
-        model_input_data['town'] = town
-        model_input_data['flat_type'] = flat_type
-        model_input_data['storey_range'] = storey_range
-        model_input_data['flat_model'] = flat_model
-        model_input_data['floor_area_sqm'] = floor_area_sqm
+        # --- Create DataFrame for Prediction ---
+        df_for_prediction = pd.DataFrame()
         
-        numeric_features = [f"dist_{poi[2]}_m" for poi in ALL_POIS] + ['floor_area_sqm']
-        categorical_features = ['town', 'flat_type', 'storey_range', 'flat_model']
-        df_predict = model_input_data[numeric_features + categorical_features]
+        # Add all features the model was trained on
+        df_for_prediction['town'] = [town]
+        df_for_prediction['flat_type'] = [flat_type]
+        df_for_prediction['storey_range'] = [storey_range]
+        df_for_prediction['flat_model'] = [flat_model]
+        df_for_prediction['floor_area_sqm'] = [floor_area_sqm]
+        df_for_prediction['lease_commence_date'] = [lease_commence_date]
+        df_for_prediction['remaining_lease_years'] = [lease_years + lease_months / 12.0]
+        
+        # Add all distance features from the display dataframe
+        for _, _, prefix in ALL_POIS:
+            dist_col_name = f"dist_{prefix}_m"
+            df_for_prediction[dist_col_name] = df_for_display[dist_col_name]
 
         with st.spinner('Calculating the estimated price...'):
-            prediction = model_pipeline.predict(df_predict)
+            prediction = model_pipeline.predict(df_for_prediction)
             predicted_price = prediction[0]
 
         st.header("Prediction Results")
@@ -182,16 +199,15 @@ if submitted:
             for _, _, prefix in ALL_POIS:
                 poi_results.append({
                     "Amenity": prefix.replace('_', ' ').title(),
-                    "Name": input_data.iloc[0][f"nearest_{prefix}"],
-                    "Distance (m)": f"{input_data.iloc[0][f'dist_{prefix}_m']:.0f}"
+                    "Name": df_for_display.iloc[0][f"nearest_{prefix}"],
+                    "Distance (m)": f"{df_for_display.iloc[0][f'dist_{prefix}_m']:.0f}"
                 })
             st.dataframe(pd.DataFrame(poi_results), height=400)
 
         with res_col2:
             st.subheader("Location Map")
-            # Create marker string for OneMap Static API
             flat_marker = f'[{lat},{lon},"blue","H"]'
-            poi_markers = '|'.join([f'[{input_data.iloc[0][f"lat_{prefix}"]},{input_data.iloc[0][f"lon_{prefix}"]},"red",""]' for _, _, prefix in ALL_POIS])
+            poi_markers = '|'.join([f'[{df_for_display.iloc[0][f"lat_{prefix}"]},{df_for_display.iloc[0][f"lon_{prefix}"]},"red",""]' for _, _, prefix in ALL_POIS])
             all_markers = f"{flat_marker}|{poi_markers}"
             
             map_url = f"https://www.onemap.gov.sg/api/staticmap/getStaticImage?layerchosen=default&lat={lat}&lng={lon}&zoom=16&width=600&height=512&points={all_markers}"
