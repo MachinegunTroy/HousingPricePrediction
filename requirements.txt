@@ -5,3 +5,4 @@ joblib
 numpy
 requests
 folium
+streamlit-folium
