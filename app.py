@@ -16,15 +16,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- Initialize Session State ---
+# This ensures the variables exist across re-runs
+if 'prediction_results' not in st.session_state:
+    st.session_state.prediction_results = None
+
 # --- OneMap API Authentication & Functions ---
 @st.cache_resource
 def get_onemap_token():
-    # Using st.secrets for deployment
     try:
         email = st.secrets["ONEMAP_EMAIL"]
         password = st.secrets["ONEMAP_PASSWORD"]
     except (KeyError, FileNotFoundError):
-        # Fallback for local development if secrets aren't set
         email = "troykueh@gmail.com"
         password = "Itstroy5834@"
         
@@ -38,6 +41,7 @@ def get_onemap_token():
         st.error(f"Failed to get OneMap token: {e}")
         return None
 
+@st.cache_data
 def search_location(location, token):
     if not token: return None, None
     url = "https://www.onemap.gov.sg/api/common/elastic/search"
@@ -102,6 +106,7 @@ def find_lat_lon_cols(df):
 def add_nearest_poi_info(df_flats, df_poi, name_col, poi_prefix):
     lat_col, lon_col = find_lat_lon_cols(df_poi)
     df_poi_clean = df_poi.dropna(subset=[lat_col, lon_col]).copy()
+    if df_poi_clean.empty: return df_flats # Return if no valid POIs
     poi_rad = np.deg2rad(df_poi_clean[[lat_col, lon_col]].values)
     tree = BallTree(poi_rad, metric="haversine")
     flats_rad = np.deg2rad(df_flats[["latitude", "longitude"]].values)
@@ -154,7 +159,7 @@ with st.form("prediction_form"):
 
     submitted = st.form_submit_button("Predict & Generate Map")
 
-# --- Prediction & Map Generation Logic ---
+# --- Calculation Logic (when form is submitted) ---
 if submitted:
     location_query = f"{block} {street_name}"
     with st.spinner(f"Getting coordinates for {location_query}..."):
@@ -162,71 +167,80 @@ if submitted:
 
     if lat is None or lon is None:
         st.error(f"Could not find coordinates for '{location_query}'. Please check the address.")
+        st.session_state.prediction_results = None # Clear previous results on error
     else:
-        st.success(f"Found coordinates: Latitude={lat:.5f}, Longitude={lon:.5f}")
-        
-        # Create DataFrame for Display and POI calculation
-        df_for_display = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
-        with st.spinner('Finding nearest amenities...'):
+        with st.spinner('Finding nearest amenities and making prediction...'):
+            # Create DataFrame for Display and POI calculation
+            df_for_display = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
             for poi_df, name_col, prefix in ALL_POIS:
                 df_for_display = add_nearest_poi_info(df_for_display, poi_df, name_col, prefix)
 
-        # Create DataFrame for Model Prediction
-        df_for_prediction = pd.DataFrame()
-        
-        df_for_prediction['town'] = [town]
-        df_for_prediction['flat_type'] = [flat_type]
-        df_for_prediction['storey_range'] = [storey_range]
-        df_for_prediction['flat_model'] = [flat_model]
-        df_for_prediction['floor_area_sqm'] = [floor_area_sqm]
-        df_for_prediction['lease_commence_date'] = [lease_commence_date]
-        df_for_prediction['remaining_lease_years'] = [lease_years + lease_months / 12.0]
-        
-        for _, _, prefix in ALL_POIS:
-            dist_col_name = f"dist_{prefix}_m"
-            df_for_prediction[dist_col_name] = df_for_display[dist_col_name]
-
-        with st.spinner('Calculating the estimated price...'):
-            prediction = model_pipeline.predict(df_for_prediction)
-            predicted_price = prediction[0]
-
-        st.header("Prediction Results")
-        res_col1, res_col2 = st.columns([1, 2])
-        
-        with res_col1:
-            st.metric(label="Estimated Resale Price (SGD)", value=f"${predicted_price:,.2f}")
-            st.subheader("Nearest Amenities")
-            poi_results = []
-            for _, _, prefix in ALL_POIS:
-                poi_results.append({
-                    "Amenity": prefix.replace('_', ' ').title(),
-                    "Name": df_for_display.iloc[0][f"nearest_{prefix}"],
-                    "Distance (m)": f"{df_for_display.iloc[0][f'dist_{prefix}_m']:.0f}"
-                })
-            st.dataframe(pd.DataFrame(poi_results), height=500)
-
-        with res_col2:
-            st.subheader("Interactive Location Map")
+            # Create DataFrame for Model Prediction
+            df_for_prediction = pd.DataFrame()
+            df_for_prediction['town'] = [town]
+            df_for_prediction['flat_type'] = [flat_type]
+            df_for_prediction['storey_range'] = [storey_range]
+            df_for_prediction['flat_model'] = [flat_model]
+            df_for_prediction['floor_area_sqm'] = [floor_area_sqm]
+            df_for_prediction['lease_commence_date'] = [lease_commence_date]
+            df_for_prediction['remaining_lease_years'] = [lease_years + lease_months / 12.0]
             
-            # --- Folium Map Creation ---
-            primary_coords = (lat, lon)
-            m = folium.Map(location=primary_coords, zoom_start=16, tiles=None)
-
-            folium.TileLayer(
-                tiles='https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png',
-                attr='<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:20px;width:20px;"/> <a href="https://www.onemap.gov.sg/" target="_blank">OneMap</a> © contributors',
-                name='OneMap Default'
-            ).add_to(m)
-
-            # Add primary HDB location marker
-            folium.Marker(
-                location=primary_coords,
-                popup=folium.Popup(f"<b>HDB Location</b><br>{location_query}", max_width=250),
-                icon=folium.Icon(color='blue', icon='home')
-            ).add_to(m)
-
-            # Add markers for nearest amenities
             for _, _, prefix in ALL_POIS:
+                dist_col_name = f"dist_{prefix}_m"
+                df_for_prediction[dist_col_name] = df_for_display[dist_col_name]
+
+            prediction = model_pipeline.predict(df_for_prediction)
+            
+            # *** SAVE RESULTS TO SESSION STATE ***
+            st.session_state.prediction_results = {
+                "price": prediction[0],
+                "display_df": df_for_display,
+                "location_query": location_query,
+                "primary_coords": (lat, lon)
+            }
+
+# --- Display Logic (runs on every script re-run) ---
+if st.session_state.prediction_results:
+    results = st.session_state.prediction_results
+    predicted_price = results["price"]
+    df_for_display = results["display_df"]
+    location_query = results["location_query"]
+    lat, lon = results["primary_coords"]
+
+    st.header("Prediction Results")
+    res_col1, res_col2 = st.columns([1, 2])
+    
+    with res_col1:
+        st.metric(label="Estimated Resale Price (SGD)", value=f"${predicted_price:,.2f}")
+        st.subheader("Nearest Amenities")
+        poi_results = []
+        for _, _, prefix in ALL_POIS:
+            poi_results.append({
+                "Amenity": prefix.replace('_', ' ').title(),
+                "Name": df_for_display.iloc[0][f"nearest_{prefix}"],
+                "Distance (m)": f"{df_for_display.iloc[0][f'dist_{prefix}_m']:.0f}"
+            })
+        st.dataframe(pd.DataFrame(poi_results), height=500)
+
+    with res_col2:
+        st.subheader("Interactive Location Map")
+        
+        m = folium.Map(location=(lat, lon), zoom_start=16, tiles=None)
+
+        folium.TileLayer(
+            tiles='https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png',
+            attr='<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:20px;width:20px;"/> <a href="https://www.onemap.gov.sg/" target="_blank">OneMap</a> © contributors',
+            name='OneMap Default'
+        ).add_to(m)
+
+        folium.Marker(
+            location=(lat, lon),
+            popup=folium.Popup(f"<b>HDB Location</b><br>{location_query}", max_width=250),
+            icon=folium.Icon(color='blue', icon='home')
+        ).add_to(m)
+
+        for _, _, prefix in ALL_POIS:
+            if f"lat_{prefix}" in df_for_display.columns:
                 poi_name = df_for_display.iloc[0][f"nearest_{prefix}"]
                 poi_lat = df_for_display.iloc[0][f"lat_{prefix}"]
                 poi_lon = df_for_display.iloc[0][f"lon_{prefix}"]
@@ -240,9 +254,8 @@ if submitted:
                     icon=folium.Icon(color='red', icon='info-sign')
                 ).add_to(m)
 
-            # Render the map in Streamlit
-            st_folium(m, width=700, height=500)
-            
+        st_folium(m, width=700, height=512, key="map_results")
+
 # --- Sidebar ---
 st.sidebar.header("About")
 st.sidebar.info("This app predicts HDB resale prices and shows nearby amenities using a machine learning model and the OneMap API.")
