@@ -5,6 +5,8 @@ import numpy as np
 from sklearn.neighbors import BallTree
 import os
 import requests
+import folium
+from streamlit_folium import st_folium
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -17,12 +19,15 @@ st.set_page_config(
 # --- OneMap API Authentication & Functions ---
 @st.cache_resource
 def get_onemap_token():
+    # Using st.secrets for deployment
     try:
+        email = st.secrets["ONEMAP_EMAIL"]
+        password = st.secrets["ONEMAP_PASSWORD"]
+    except (KeyError, FileNotFoundError):
+        # Fallback for local development if secrets aren't set
         email = "troykueh@gmail.com"
         password = "Itstroy5834@"
-    except KeyError:
-        st.error("OneMap credentials not found. Please add ONEMAP_EMAIL and ONEMAP_PASSWORD to your Streamlit secrets.")
-        return None
+        
     url = "https://www.onemap.gov.sg/api/auth/post/getToken"
     payload = {"email": email, "password": password}
     try:
@@ -109,8 +114,6 @@ def add_nearest_poi_info(df_flats, df_poi, name_col, poi_prefix):
     df_flats[f"lon_{poi_prefix}"] = df_poi_clean.iloc[nearest_indices][lon_col].values
     return df_flats
 
-# *** THIS IS THE FIX ***
-# Manually define the POIs with the correct prefixes to match the trained model
 ALL_POIS = [
     (dataframes["bus_stops"], "name", "bus_stop"),
     (dataframes["pei"], "Name", "pei"),
@@ -162,16 +165,15 @@ if submitted:
     else:
         st.success(f"Found coordinates: Latitude={lat:.5f}, Longitude={lon:.5f}")
         
-        # --- Create DataFrame for Display ---
+        # Create DataFrame for Display and POI calculation
         df_for_display = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
         with st.spinner('Finding nearest amenities...'):
             for poi_df, name_col, prefix in ALL_POIS:
                 df_for_display = add_nearest_poi_info(df_for_display, poi_df, name_col, prefix)
 
-        # --- Create DataFrame for Prediction ---
+        # Create DataFrame for Model Prediction
         df_for_prediction = pd.DataFrame()
         
-        # Add all features the model was trained on
         df_for_prediction['town'] = [town]
         df_for_prediction['flat_type'] = [flat_type]
         df_for_prediction['storey_range'] = [storey_range]
@@ -180,7 +182,6 @@ if submitted:
         df_for_prediction['lease_commence_date'] = [lease_commence_date]
         df_for_prediction['remaining_lease_years'] = [lease_years + lease_months / 12.0]
         
-        # Add all distance features from the display dataframe
         for _, _, prefix in ALL_POIS:
             dist_col_name = f"dist_{prefix}_m"
             df_for_prediction[dist_col_name] = df_for_display[dist_col_name]
@@ -202,16 +203,45 @@ if submitted:
                     "Name": df_for_display.iloc[0][f"nearest_{prefix}"],
                     "Distance (m)": f"{df_for_display.iloc[0][f'dist_{prefix}_m']:.0f}"
                 })
-            st.dataframe(pd.DataFrame(poi_results), height=400)
+            st.dataframe(pd.DataFrame(poi_results), height=500)
 
         with res_col2:
-            st.subheader("Location Map")
-            flat_marker = f'[{lat},{lon},"blue","H"]'
-            poi_markers = '|'.join([f'[{df_for_display.iloc[0][f"lat_{prefix}"]},{df_for_display.iloc[0][f"lon_{prefix}"]},"red",""]' for _, _, prefix in ALL_POIS])
-            all_markers = f"{flat_marker}|{poi_markers}"
+            st.subheader("Interactive Location Map")
             
-            map_url = f"https://www.onemap.gov.sg/api/staticmap/getStaticImage?layerchosen=default&lat={lat}&lng={lon}&zoom=16&width=600&height=512&points={all_markers}"
-            st.image(map_url, caption="Blue: HDB Flat, Red: Nearest Amenities")
+            # --- Folium Map Creation ---
+            primary_coords = (lat, lon)
+            m = folium.Map(location=primary_coords, zoom_start=16, tiles=None)
+
+            folium.TileLayer(
+                tiles='https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png',
+                attr='<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:20px;width:20px;"/> <a href="https://www.onemap.gov.sg/" target="_blank">OneMap</a> © contributors',
+                name='OneMap Default'
+            ).add_to(m)
+
+            # Add primary HDB location marker
+            folium.Marker(
+                location=primary_coords,
+                popup=folium.Popup(f"<b>HDB Location</b><br>{location_query}", max_width=250),
+                icon=folium.Icon(color='blue', icon='home')
+            ).add_to(m)
+
+            # Add markers for nearest amenities
+            for _, _, prefix in ALL_POIS:
+                poi_name = df_for_display.iloc[0][f"nearest_{prefix}"]
+                poi_lat = df_for_display.iloc[0][f"lat_{prefix}"]
+                poi_lon = df_for_display.iloc[0][f"lon_{prefix}"]
+                poi_dist = df_for_display.iloc[0][f"dist_{prefix}_m"]
+                
+                popup_html = f"<b>{poi_name}</b><br>({prefix.replace('_', ' ').title()})<br>Distance: {poi_dist:.0f} m"
+                
+                folium.Marker(
+                    location=[poi_lat, poi_lon],
+                    popup=folium.Popup(popup_html, max_width=250),
+                    icon=folium.Icon(color='red', icon='info-sign')
+                ).add_to(m)
+
+            # Render the map in Streamlit
+            st_folium(m, width=700, height=500)
             
 # --- Sidebar ---
 st.sidebar.header("About")
