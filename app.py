@@ -178,9 +178,14 @@ with st.form("prediction_form"):
         lease_months = st.number_input("Months", min_value=0, max_value=11, value=7)
     
     st.markdown("---") # Visual separator
-    # <-- ADDED: User acknowledgement
+    
+    # Disclaimer and Acknowledgement
     st.warning("Disclaimer: This prediction is an estimate and should be used as a guide only. Market conditions and other factors can affect the final price.")
-    disclaimer_ack = st.checkbox("I acknowledge the above statement.")
+    
+    # <-- ADDED: Privacy Notice
+    st.info("Privacy Notice: We do not collect or store any of the data you enter.", icon="🔒")
+    
+    disclaimer_ack = st.checkbox("I acknowledge the above statements.")
     
     submitted = st.form_submit_button("Predict & Generate Map")
 
