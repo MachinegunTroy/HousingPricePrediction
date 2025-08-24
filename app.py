@@ -7,6 +7,7 @@ import os
 import requests
 import folium
 from streamlit_folium import st_folium
+from tensorflow import keras # <-- ADDED: Needed for Keras model check
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -17,13 +18,13 @@ st.set_page_config(
 )
 
 # --- Initialize Session State ---
-# This ensures the variables exist across re-runs
 if 'prediction_results' not in st.session_state:
     st.session_state.prediction_results = None
 
 # --- OneMap API Authentication & Functions ---
 @st.cache_resource
 def get_onemap_token():
+    # ... (this function remains the same)
     try:
         email = st.secrets["ONEMAP_EMAIL"]
         password = st.secrets["ONEMAP_PASSWORD"]
@@ -43,6 +44,7 @@ def get_onemap_token():
 
 @st.cache_data
 def search_location(location, token):
+    # ... (this function remains the same)
     if not token: return None, None
     url = "https://www.onemap.gov.sg/api/common/elastic/search"
     headers = {"Authorization": f"Bearer {token}"}
@@ -56,10 +58,11 @@ def search_location(location, token):
         return float(first["LATITUDE"]), float(first["LONGITUDE"])
     except (requests.exceptions.RequestException, KeyError, ValueError):
         return None, None
-
+        
 # --- Caching Data Loading ---
 @st.cache_data
 def load_data():
+    # ... (this function remains the same)
     base_path = 'data/'
     return {
         "main": pd.read_csv(os.path.join(base_path, 'output.csv')),
@@ -77,26 +80,37 @@ def load_data():
         "sports_facilities": pd.read_csv(os.path.join(base_path, 'sportsg_sport_facilities.csv')),
         "hawker_centres": pd.read_csv(os.path.join(base_path, 'ssot_hawkercentres.csv'))
     }
-
-# --- Load Model ---
-@st.cache_resource
-def load_model():
+    
+# --- Load Models and Preprocessors ---
+@st.cache_resource # <-- MODIFIED: Function to load all ensemble components
+def load_ensemble_assets():
+    """Loads all necessary models, preprocessor, and scaler."""
     try:
-        return joblib.load('models/model_pipeline.joblib')
-    except FileNotFoundError:
+        base_path = 'models/'
+        assets = {
+            "preprocessor": joblib.load(os.path.join(base_path, 'preprocessor.joblib')),
+            "scaler": joblib.load(os.path.join(base_path, 'scaler.joblib')),
+            "mlp": joblib.load(os.path.join(base_path, 'best_mlp.joblib')),
+            "catboost": joblib.load(os.path.join(base_path, 'catboost_model.joblib')),
+            "xgb": joblib.load(os.path.join(base_path, 'xgb_model 24Aug25.joblib')),
+            "meta_model": joblib.load(os.path.join(base_path, 'ensemble_model.joblib'))
+        }
+        return assets
+    except FileNotFoundError as e:
+        st.error(f"A required model file was not found: {e}. Please ensure all model files are in the 'models/' directory.")
         return None
 
 # --- Main App Logic ---
 ACCESS_TOKEN = get_onemap_token()
 dataframes = load_data()
-model_pipeline = load_model()
+ensemble_assets = load_ensemble_assets()
 
-if model_pipeline is None:
-    st.error("Model file not found. Please ensure `models/model_pipeline.joblib` exists.")
+if ensemble_assets is None:
     st.stop()
 
 # --- Helper Functions for POI Calculation ---
 def find_lat_lon_cols(df):
+    # ... (this function remains the same)
     lower = {c.lower(): c for c in df.columns}
     lat = lower.get("latitude") or lower.get("lat")
     lon = lower.get("longitude") or lower.get("long") or lower.get("lon")
@@ -104,6 +118,7 @@ def find_lat_lon_cols(df):
     return lat, lon
 
 def add_nearest_poi_info(df_flats, df_poi, name_col, poi_prefix):
+    # ... (this function remains the same)
     lat_col, lon_col = find_lat_lon_cols(df_poi)
     df_poi_clean = df_poi.dropna(subset=[lat_col, lon_col]).copy()
     if df_poi_clean.empty: return df_flats # Return if no valid POIs
@@ -156,51 +171,78 @@ with st.form("prediction_form"):
         st.markdown("<h6>Remaining Lease</h6>", unsafe_allow_html=True)
         lease_years = st.number_input("Years", min_value=0, max_value=99, value=60)
         lease_months = st.number_input("Months", min_value=0, max_value=11, value=7)
-
+    
+    st.markdown("---") # Visual separator
+    # <-- ADDED: User acknowledgement
+    st.warning("Disclaimer: This prediction is an estimate and should be used as a guide only. Market conditions and other factors can affect the final price.")
+    disclaimer_ack = st.checkbox("I acknowledge the above statement.")
+    
     submitted = st.form_submit_button("Predict & Generate Map")
 
 # --- Calculation Logic (when form is submitted) ---
 if submitted:
-    location_query = f"{block} {street_name}"
-    with st.spinner(f"Getting coordinates for {location_query}..."):
-        lat, lon = search_location(location_query, ACCESS_TOKEN)
-
-    if lat is None or lon is None:
-        st.error(f"Could not find coordinates for '{location_query}'. Please check the address.")
-        st.session_state.prediction_results = None # Clear previous results on error
+    if not disclaimer_ack: # <-- ADDED: Check if disclaimer is acknowledged
+        st.error("Please acknowledge the disclaimer before predicting.")
     else:
-        with st.spinner('Finding nearest amenities and making prediction...'):
-            # Create DataFrame for Display and POI calculation
-            df_for_display = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
-            for poi_df, name_col, prefix in ALL_POIS:
-                df_for_display = add_nearest_poi_info(df_for_display, poi_df, name_col, prefix)
+        location_query = f"{block} {street_name}"
+        with st.spinner(f"Getting coordinates for {location_query}..."):
+            lat, lon = search_location(location_query, ACCESS_TOKEN)
 
-            # Create DataFrame for Model Prediction
-            df_for_prediction = pd.DataFrame()
-            df_for_prediction['town'] = [town]
-            df_for_prediction['flat_type'] = [flat_type]
-            df_for_prediction['storey_range'] = [storey_range]
-            df_for_prediction['flat_model'] = [flat_model]
-            df_for_prediction['floor_area_sqm'] = [floor_area_sqm]
-            df_for_prediction['lease_commence_date'] = [lease_commence_date]
-            df_for_prediction['remaining_lease_years'] = [lease_years + lease_months / 12.0]
-            
-            for _, _, prefix in ALL_POIS:
-                dist_col_name = f"dist_{prefix}_m"
-                df_for_prediction[dist_col_name] = df_for_display[dist_col_name]
+        if lat is None or lon is None:
+            st.error(f"Could not find coordinates for '{location_query}'. Please check the address.")
+            st.session_state.prediction_results = None 
+        else:
+            with st.spinner('Finding nearest amenities and making prediction...'):
+                df_for_display = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
+                for poi_df, name_col, prefix in ALL_POIS:
+                    df_for_display = add_nearest_poi_info(df_for_display, poi_df, name_col, prefix)
 
-            prediction = model_pipeline.predict(df_for_prediction)
-            
-            # *** SAVE RESULTS TO SESSION STATE ***
-            st.session_state.prediction_results = {
-                "price": prediction[0],
-                "display_df": df_for_display,
-                "location_query": location_query,
-                "primary_coords": (lat, lon)
-            }
+                # Create DataFrame for Model Prediction
+                df_for_prediction = pd.DataFrame()
+                df_for_prediction['town'] = [town]
+                df_for_prediction['flat_type'] = [flat_type]
+                df_for_prediction['storey_range'] = [storey_range]
+                df_for_prediction['flat_model'] = [flat_model]
+                df_for_prediction['floor_area_sqm'] = [floor_area_sqm]
+                df_for_prediction['lease_commence_date'] = [lease_commence_date]
+                df_for_prediction['remaining_lease_years'] = [lease_years + lease_months / 12.0]
+                
+                for _, _, prefix in ALL_POIS:
+                    dist_col_name = f"dist_{prefix}_m"
+                    df_for_prediction[dist_col_name] = df_for_display[dist_col_name]
+
+                # --- MODIFIED: Ensemble Prediction Logic ---
+                # 1. Preprocess the input data
+                processed_input = ensemble_assets['preprocessor'].transform(df_for_prediction)
+                
+                # 2. Get predictions from base models (handle Keras reshape)
+                mlp_input = np.reshape(processed_input, (processed_input.shape[0], 1, processed_input.shape[1]))
+                mlp_pred = ensemble_assets['mlp'].predict(mlp_input)
+                catboost_pred = ensemble_assets['catboost'].predict(processed_input)
+                xgb_pred = ensemble_assets['xgb'].predict(processed_input)
+                
+                # 3. Stack predictions for the meta-model
+                stacked_features = np.column_stack((mlp_pred, catboost_pred, xgb_pred))
+                
+                # 4. Get final scaled prediction from meta-model
+                final_pred_scaled = ensemble_assets['meta_model'].predict(stacked_features)
+                
+                # 5. Inverse transform to get the price in dollars
+                final_pred_unscaled = ensemble_assets['scaler'].inverse_transform(final_pred_scaled.reshape(-1, 1))
+                
+                prediction = final_pred_unscaled[0][0] # Get the single price value
+                
+                # --- SAVE RESULTS TO SESSION STATE ---
+                st.session_state.prediction_results = {
+                    "price": prediction,
+                    "display_df": df_for_display,
+                    "location_query": location_query,
+                    "primary_coords": (lat, lon)
+                }
 
 # --- Display Logic (runs on every script re-run) ---
 if st.session_state.prediction_results:
+    # ... (this entire display section remains the same)
     results = st.session_state.prediction_results
     predicted_price = results["price"]
     df_for_display = results["display_df"]
@@ -256,6 +298,10 @@ if st.session_state.prediction_results:
 
         st_folium(m, width=700, height=512, key="map_results")
 
+
 # --- Sidebar ---
 st.sidebar.header("About")
 st.sidebar.info("This app predicts HDB resale prices and shows nearby amenities using a machine learning model and the OneMap API.")
+# <-- ADDED: Model version number
+st.sidebar.markdown("---")
+st.sidebar.text("Model Version: v2")
