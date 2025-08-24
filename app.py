@@ -201,21 +201,17 @@ if submitted:
                 df_for_display = pd.DataFrame({'latitude': [lat], 'longitude': [lon]})
                 for poi_df, name_col, prefix in ALL_POIS:
                     df_for_display = add_nearest_poi_info(df_for_display, poi_df, name_col, prefix)
-
-                # --- MODIFIED: Added Manual Preprocessing Steps Here ---
-
-                # 1. Create DataFrame for Model Prediction from form inputs
+                
+                # --- Manual Preprocessing ---
                 df_for_prediction = pd.DataFrame()
                 df_for_prediction['town'] = [town]
                 df_for_prediction['flat_type'] = [flat_type]
-                # Storey_range is still text here, we'll convert it next
                 df_for_prediction['storey_range'] = [storey_range] 
                 df_for_prediction['flat_model'] = [flat_model]
                 df_for_prediction['floor_area_sqm'] = [floor_area_sqm]
                 df_for_prediction['lease_commence_date'] = [lease_commence_date]
                 df_for_prediction['remaining_lease_years'] = [lease_years + lease_months / 12.0]
                 
-                # 2. Add the floor map for ordinal encoding
                 floor_map = {
                     '01 TO 03': 2, '04 TO 06': 5, '07 TO 09': 8, '10 TO 12': 11, '13 TO 15': 14,
                     '16 TO 18': 17, '19 TO 21': 20, '22 TO 24': 23, '25 TO 27': 26, '28 TO 30': 29,
@@ -223,11 +219,8 @@ if submitted:
                     '46 TO 48': 47, '49 TO 51': 50,
                 }
                 df_for_prediction['storey_ordinal'] = df_for_prediction['storey_range'].map(floor_map)
-                
-                # We no longer need the original storey_range column for the model
                 df_for_prediction = df_for_prediction.drop(columns=['storey_range'])
 
-                # 3. Add distance features
                 for _, _, prefix in ALL_POIS:
                     dist_col_name = f"dist_{prefix}_m"
                     df_for_prediction[dist_col_name] = df_for_display[dist_col_name]
@@ -237,9 +230,9 @@ if submitted:
                 # 4. Preprocess the fully prepared input data
                 processed_input = ensemble_assets['preprocessor'].transform(df_for_prediction)
                 
+                # --- FIX: REMOVED the reshape line. MLP needs 2D input. ---
                 # 5. Get predictions from base models
-                mlp_input = np.reshape(processed_input, (processed_input.shape[0], 1, processed_input.shape[1]))
-                mlp_pred = ensemble_assets['mlp'].predict(mlp_input)
+                mlp_pred = ensemble_assets['mlp'].predict(processed_input) # <-- Use the 2D data directly
                 catboost_pred = ensemble_assets['catboost'].predict(processed_input)
                 xgb_pred = ensemble_assets['xgb'].predict(processed_input)
                 
