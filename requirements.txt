@@ -1,8 +1,10 @@
 streamlit
 pandas
-scikit-learn==1.6.1
-joblib
+scikit-learn
 numpy
 requests
 folium
 streamlit-folium
+tensorflow
+xgboost
+catboost
