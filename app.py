@@ -86,7 +86,12 @@ def load_data():
 def load_ensemble_assets():
     """Loads all necessary models, preprocessor, and scaler."""
     try:
-        base_path = 'models/'
+        # --- FIX: Create an absolute path to the models directory ---
+        # Get the directory where the current script (app.py) is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Join that directory with the 'models' folder name
+        base_path = os.path.join(script_dir, 'models')
+
         assets = {
             "preprocessor": joblib.load(os.path.join(base_path, 'preprocessor.joblib')),
             "scaler": joblib.load(os.path.join(base_path, 'scaler.joblib')),
